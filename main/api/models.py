@@ -1,9 +1,23 @@
+import random
+from datetime import timedelta
+from django.utils import timezone
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, AbstractBaseUser, PermissionsMixin
 from django.db.models.signals import post_save
 
 
 class User(AbstractUser):
+    otp = models.CharField(max_length=6, blank=True, null=True)
+    otp_exp = models.DateTimeField(blank=True, null=True) 
+    otp_verified = models.BooleanField(default=False)
+
+    def generate_otp(self):
+        self.otp = str(random.randint(100000, 999999))  # Generate 6-digit OTP
+        self.otp_exp = timezone.now() + timedelta(minutes=10)
+        self.otp_verified = False
+        self.save()
+
+
     username = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
 
@@ -12,7 +26,8 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username 
-    
+
+
 
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
