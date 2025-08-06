@@ -1,10 +1,14 @@
 from api.models import User, Profile
-from django.core.mail import send_mail
+from django.core.mail import send_mail, get_connection
 from django.utils.timezone import now, timedelta
+from datetime import timedelta
+import datetime
+
 
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
+from django.conf import settings
 
 
 class UserSerializer(serializers.ModelField):
@@ -63,15 +67,22 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
         
+        email_backend = settings.EMAIL_HOST
+        if not email_backend:
+            # Если email не настроен, не отправляем OTP
+            return value
+        
         user.generate_otp()
+
         send_mail(
             "Password Reset OTP",
             f"Your OTP for password reset is {user.otp}",
-            "noreply@example.com",  # Change this to your email
+            "noreply@example.com", 
             [user.email],
             fail_silently=False,
         )
         return value
+    
     
 
 class OTPVerificationSerializer(serializers.Serializer):
@@ -83,16 +94,38 @@ class OTPVerificationSerializer(serializers.Serializer):
             user = User.objects.get(email=data["email"])
         except User.DoesNotExist:
             raise serializers.ValidationError({"email": "User not found."})
+        
+        # Проверка, заблокирован ли пользователь
+        if user.is_blocked():
+            remaining = (user.block_until - now()).total_seconds()
+            raise serializers.ValidationError({
+                "detail": f"Too many attempts. Try again in {int(remaining)} seconds."})
+        
+         # Проверка, если OTP уже истек
+        if user.otp_exp is None or user.otp_exp < now():
+            # Генерируем новый OTP, если предыдущий истек
+            user.generate_otp()
+            raise serializers.ValidationError({"otp": "OTP expired. A new OTP has been sent."})
+
 
         # Check if OTP is correct and not expired
         if user.otp != data["otp"]:
-            raise serializers.ValidationError({"otp": "Invalid OTP."})
+            user.increment_attempts()
+            # После увеличения попыток, если лимит достигнут, пользователь заблокирован
+            if user.otp_attempts >= user.max_try_top:
+                raise serializers.ValidationError({
+                    "otp": "Too many invalid attempts. You are temporarily blocked."})
+            else:
+                raise serializers.ValidationError({"otp": "Invalid OTP."})
 
-        if user.otp_exp < now():  # OTP expired
+        if user.otp_exp < now():  # OTP срок
             raise serializers.ValidationError({"otp": "OTP expired."})
+        
+        
 
-        # Mark OTP as verified
+        #OTP зарегестрирован
         user.otp_verified = True
+        user.reset_attempts()
         user.save()
 
         return data

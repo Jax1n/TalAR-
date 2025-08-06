@@ -2,6 +2,7 @@ import random
 from datetime import timedelta
 from django.utils import timezone
 from django.db import models
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser, AbstractBaseUser, PermissionsMixin
 from django.db.models.signals import post_save
 
@@ -10,11 +11,32 @@ class User(AbstractUser):
     otp = models.CharField(max_length=6, blank=True, null=True)
     otp_exp = models.DateTimeField(blank=True, null=True) 
     otp_verified = models.BooleanField(default=False)
+    max_try_top = settings.MAX_OTP_TRY
+    otp_attempts = models.IntegerField(default=0)
+    block_until = models.DateTimeField(blank=True, null=True)
 
     def generate_otp(self):
-        self.otp = str(random.randint(100000, 999999))  # Generate 6-digit OTP
-        self.otp_exp = timezone.now() + timedelta(minutes=10)
+        self.otp = str(random.randint(100000, 999999))
+        self.otp_exp = timezone.now() + timedelta(minutes=1)
         self.otp_verified = False
+        self.otp_attempts = 0  # сброс попыток при генерации нового OTP
+        self.save()
+
+    def is_blocked(self):
+        if self.block_until and self.block_until > timezone.now():
+            return True
+        return False
+
+    def increment_attempts(self):
+        self.otp_attempts += 1
+        if self.otp_attempts >= self.max_try_top:
+            # блокируем пользователя на 1 минуту
+            self.block_until = timezone.now() + timedelta(minutes=1)
+        self.save()
+
+    def reset_attempts(self):
+        self.otp_attempts = 0
+        self.block_until = None
         self.save()
 
 
